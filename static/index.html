@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>S3 Trace Sync — Magpie Observability</title>
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var t = params.get("theme");
+      if (t !== "dark" && t !== "light") {
+        t = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }
+      document.documentElement.dataset.theme = t;
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-group">
+        <div class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 128 128" width="28" height="28">
+            <rect x="6" y="6" width="116" height="116" rx="28" fill="#18181b"/>
+            <path d="M38 82h50a16 16 0 0 0 2.5-31.8A24 24 0 0 0 43.2 44 18 18 0 0 0 38 82Z" fill="#f38020" fill-opacity="0.22" stroke="#f38020" stroke-width="6" stroke-linejoin="round"/>
+            <path d="M44 66h12l7-14 9 24 6-10h10" stroke="#ffffff" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-title-row">
+            <h1>S3 Trace Sync</h1>
+            <span class="badge badge-r2" id="provider-badge">Cloudflare R2</span>
+            <span class="status-pill" id="sync-status-pill">Loading…</span>
+          </div>
+          <p class="brand-subtitle">OpenRouter-style Observability &amp; Conversation Broadcast for Magpie</p>
+        </div>
+      </div>
+
+      <div class="topbar-controls">
+        <select id="global-range" class="select-sm" aria-label="Time range">
+          <option value="1h">Last 1 hour</option>
+          <option value="24h">Last 24 hours</option>
+          <option value="7d" selected>Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="90d">Last 90 days</option>
+          <option value="all">All cached</option>
+        </select>
+        <button id="btn-pull-s3" class="btn btn-secondary" type="button" title="Import traces from your R2 / S3 bucket">Pull from R2</button>
+        <button id="btn-refresh" class="btn btn-secondary" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <nav class="nav-tabs" role="tablist" aria-label="Observability views">
+      <button class="tab-btn active" role="tab" aria-selected="true" data-tab="logs">Logs</button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="sessions">Sessions</button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="activity">Activity</button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="explore">Explore</button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="settings">Broadcast &amp; R2</button>
+    </nav>
+
+    <div id="banner" class="banner" hidden role="status"></div>
+
+    <!-- LOGS TAB -->
+    <section id="tab-logs" class="tab-panel active">
+      <div class="filter-bar">
+        <input id="filter-q" class="input-search" type="search" placeholder="Search prompts, completions, trace ID, session, model, or S3 key…">
+        <select id="filter-model" aria-label="Filter by model"><option value="">All models</option></select>
+        <select id="filter-provider" aria-label="Filter by provider"><option value="">All providers</option></select>
+        <select id="filter-agent" aria-label="Filter by agent"><option value="">All agents</option></select>
+        <select id="filter-apikey" aria-label="Filter by gateway key"><option value="">All API keys</option></select>
+        <select id="filter-status" aria-label="Filter by status">
+          <option value="">All statuses</option>
+          <option value="completed">Completed</option>
+          <option value="error">Error</option>
+        </select>
+        <select id="filter-sync" aria-label="Filter by S3 sync state">
+          <option value="">All sync states</option>
+          <option value="synced">Synced</option>
+          <option value="retrying">Retrying</option>
+          <option value="queued_batch">Queued</option>
+          <option value="local_only">Local only</option>
+          <option value="failed">Failed</option>
+        </select>
+        <button id="btn-clear-filters" class="btn btn-ghost" type="button">Clear</button>
+      </div>
+
+      <div class="card histogram-card">
+        <div class="card-head">
+          <span class="card-title">Request Volume</span>
+          <span class="muted" id="logs-count-label">0 generations</span>
+        </div>
+        <div id="logs-histogram" class="histogram-wrap"></div>
+      </div>
+
+      <div class="card table-card">
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Model &amp; Provider</th>
+                <th>Prompt Preview</th>
+                <th>Agent / Key</th>
+                <th class="num">Tokens</th>
+                <th class="num">Latency</th>
+                <th>Sync</th>
+              </tr>
+            </thead>
+            <tbody id="logs-tbody"></tbody>
+          </table>
+        </div>
+        <div class="pagination-bar">
+          <span id="logs-page-info" class="muted">Showing 0–0</span>
+          <div class="pagination-actions">
+            <button id="btn-prev-page" class="btn btn-secondary btn-sm" type="button" disabled>Previous</button>
+            <button id="btn-next-page" class="btn btn-secondary btn-sm" type="button" disabled>Next</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SESSIONS TAB -->
+    <section id="tab-sessions" class="tab-panel" hidden>
+      <div class="card table-card">
+        <div class="card-head">
+          <div>
+            <span class="card-title">Sessions</span>
+            <p class="muted">Conversations grouped by session ID across Magpie agents and models</p>
+          </div>
+          <span class="muted" id="sessions-count-label">0 sessions</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Last Activity</th>
+                <th>Session / Title</th>
+                <th>Models &amp; Providers</th>
+                <th>Agent / Key</th>
+                <th class="num">Requests</th>
+                <th class="num">Total Tokens</th>
+              </tr>
+            </thead>
+            <tbody id="sessions-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ACTIVITY TAB -->
+    <section id="tab-activity" class="tab-panel" hidden>
+      <div class="kpi-grid" id="activity-kpis"></div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">Token Volume Over Time</span>
+            <span class="muted" id="activity-granularity">Daily</span>
+          </div>
+          <div id="activity-tokens-chart" class="chart-box"></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">Requests &amp; Errors Over Time</span>
+            <span class="muted" id="activity-sync-summary">0 synced</span>
+          </div>
+          <div id="activity-requests-chart" class="chart-box"></div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><span class="card-title">By Model</span></div>
+          <div class="table-wrap"><table class="data-table compact" id="tbl-by-model"></table></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">By Provider</span></div>
+          <div class="table-wrap"><table class="data-table compact" id="tbl-by-provider"></table></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">By Agent</span></div>
+          <div class="table-wrap"><table class="data-table compact" id="tbl-by-agent"></table></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">By Gateway API Key</span></div>
+          <div class="table-wrap"><table class="data-table compact" id="tbl-by-apikey"></table></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- EXPLORE TAB -->
+    <section id="tab-explore" class="tab-panel" hidden>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <span class="card-title">Activity Explorer</span>
+            <p class="muted">Slice tokens, requests, cache efficiency, and latency by any dimension</p>
+          </div>
+          <button id="btn-export-csv" class="btn btn-secondary" type="button">Export CSV</button>
+        </div>
+        <div class="explore-controls">
+          <label>
+            <span>Metric</span>
+            <select id="exp-metric">
+              <option value="totalTokens">Total tokens</option>
+              <option value="promptTokens">Prompt tokens</option>
+              <option value="completionTokens">Completion tokens</option>
+              <option value="cachedTokens">Cached tokens</option>
+              <option value="reasoningTokens">Reasoning tokens</option>
+              <option value="requests">Requests</option>
+              <option value="avgLatencyMs">Avg latency (ms)</option>
+              <option value="totalCost">Total cost (USD)</option>
+            </select>
+          </label>
+          <label>
+            <span>Group by</span>
+            <select id="exp-group">
+              <option value="model">Model</option>
+              <option value="provider">Provider</option>
+              <option value="agent">Agent</option>
+              <option value="apiKeyName">API Key</option>
+              <option value="sessionId">Session</option>
+              <option value="origin">Origin</option>
+              <option value="status">Status</option>
+              <option value="finishReason">Finish reason</option>
+            </select>
+          </label>
+          <label>
+            <span>Subgroup</span>
+            <select id="exp-subgroup">
+              <option value="none">None</option>
+              <option value="provider">Provider</option>
+              <option value="agent">Agent</option>
+              <option value="apiKeyName">API Key</option>
+              <option value="model">Model</option>
+              <option value="status">Status</option>
+            </select>
+          </label>
+          <label>
+            <span>Time Rollup</span>
+            <select id="exp-rollup">
+              <option value="none">Flat ranking</option>
+              <option value="day">Daily</option>
+              <option value="hour">Hourly</option>
+            </select>
+          </label>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead id="explore-thead"></thead>
+            <tbody id="explore-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- BROADCAST & R2 SETTINGS TAB -->
+    <section id="tab-settings" class="tab-panel" hidden>
+      <form id="settings-form" class="settings-layout" novalidate>
+        <div class="card setting-hero">
+          <div>
+            <h2>Broadcast &amp; Cloudflare R2 Destination</h2>
+            <p class="muted">Asynchronously stream OpenRouter-style conversation traces to Cloudflare R2 (preferred, zero egress fees) or any S3-compatible bucket without blocking Magpie responses.</p>
+          </div>
+          <label class="switch-row">
+            <input id="cfg-enabled" type="checkbox" role="switch">
+            <span>Enable Conversation Trace Sync</span>
+          </label>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">1. Storage Provider</span>
+            <span class="badge badge-r2">Cloudflare R2 Preferred</span>
+          </div>
+          <div class="provider-cards" id="provider-cards">
+            <button type="button" class="provider-card active" data-provider="r2">
+              <div class="pc-head">
+                <strong>Cloudflare R2</strong>
+                <span class="badge badge-r2">Preferred</span>
+              </div>
+              <small>S3-compatible · Auto region · Zero egress · <code>&lt;ACCOUNT_ID&gt;.r2.cloudflarestorage.com</code></small>
+            </button>
+            <button type="button" class="provider-card" data-provider="aws">
+              <div class="pc-head"><strong>AWS S3</strong></div>
+              <small>Standard Amazon S3 · Supports SSE-S3 / SSE-KMS</small>
+            </button>
+            <button type="button" class="provider-card" data-provider="gcs">
+              <div class="pc-head"><strong>Google Cloud Storage</strong></div>
+              <small>S3 interoperability via HMAC keys · <code>storage.googleapis.com</code></small>
+            </button>
+            <button type="button" class="provider-card" data-provider="custom">
+              <div class="pc-head"><strong>Custom S3 / MinIO / NAS</strong></div>
+              <small>MinIO, Synology, Ceph, RustFS, or any S3-compatible endpoint</small>
+            </button>
+          </div>
+
+          <div class="form-grid" style="margin-top: 14px;">
+            <label id="wrap-account-id">
+              <span>Cloudflare Account ID <small class="muted">(auto-builds R2 endpoint)</small></span>
+              <input id="cfg-account-id" type="text" placeholder="e.g. 0123456789abcdef0123456789abcdef" autocomplete="off" spellcheck="false">
+            </label>
+            <label id="wrap-jurisdiction">
+              <span>R2 Jurisdiction</span>
+              <select id="cfg-r2-jurisdiction">
+                <option value="default">Default (Global)</option>
+                <option value="eu">European Union (.eu.r2.cloudflarestorage.com)</option>
+                <option value="fedramp">FedRAMP (.fedramp.r2.cloudflarestorage.com)</option>
+              </select>
+            </label>
+            <label>
+              <span>Bucket Name</span>
+              <input id="cfg-bucket" type="text" placeholder="e.g. magpie-traces" autocomplete="off" spellcheck="false">
+              <small class="field-hint" id="hint-bucket">Lowercase letters, numbers, and hyphens (3–63 chars).</small>
+            </label>
+            <label>
+              <span>Region</span>
+              <input id="cfg-region" type="text" placeholder="auto" autocomplete="off" spellcheck="false">
+              <small class="field-hint" id="hint-region">Use <code>auto</code> for Cloudflare R2.</small>
+            </label>
+            <label class="span-2">
+              <span>S3 Endpoint URL</span>
+              <input id="cfg-endpoint" type="url" placeholder="https://<ACCOUNT_ID>.r2.cloudflarestorage.com" autocomplete="off" spellcheck="false">
+              <small class="field-hint" id="hint-endpoint">Auto-generated from Cloudflare Account ID for R2, or enter a custom S3 URL.</small>
+            </label>
+            <label>
+              <span>Access Key ID</span>
+              <input id="cfg-ak" type="text" placeholder="R2 or S3 Access Key ID" autocomplete="off" spellcheck="false">
+              <small class="field-hint" id="hint-ak"></small>
+            </label>
+            <label>
+              <span>Secret Access Key</span>
+              <div class="secret-row">
+                <input id="cfg-sk" type="password" placeholder="Enter secret key to set or rotate" autocomplete="off" spellcheck="false">
+                <button id="btn-toggle-sk" type="button" class="btn btn-secondary btn-sm">Show</button>
+                <button id="btn-clear-sk" type="button" class="btn btn-ghost btn-sm" hidden>Clear</button>
+              </div>
+              <small class="field-hint" id="hint-sk">Stored locally in mode 0600 config.json; never returned to the browser.</small>
+            </label>
+            <label id="wrap-session-token">
+              <span>Session Token <small class="muted">(optional STS / temporary)</small></span>
+              <input id="cfg-st" type="password" placeholder="Optional temporary session token" autocomplete="off" spellcheck="false">
+            </label>
+            <label>
+              <span>Storage Class</span>
+              <select id="cfg-storage-class">
+                <option value="STANDARD">STANDARD (default)</option>
+                <option value="STANDARD_IA">STANDARD_IA (Infrequent Access — lower cost for cold archives)</option>
+              </select>
+            </label>
+            <label id="wrap-sse">
+              <span>Server-Side Encryption <small class="muted">(AWS / Custom only)</small></span>
+              <select id="cfg-sse">
+                <option value="none">Default / Provider Managed</option>
+                <option value="AES256">SSE-S3 (AES256)</option>
+                <option value="aws:kms">SSE-KMS</option>
+              </select>
+            </label>
+            <label id="wrap-sse-kms" hidden>
+              <span>KMS Key ARN / ID</span>
+              <input id="cfg-sse-kms" type="text" placeholder="arn:aws:kms:..." autocomplete="off" spellcheck="false">
+            </label>
+          </div>
+
+          <div class="check-row">
+            <label class="checkbox-inline"><input id="cfg-path-style" type="checkbox"> <span>Force Path-Style Addressing (recommended for R2 &amp; MinIO)</span></label>
+            <label class="checkbox-inline" id="wrap-insecure-http"><input id="cfg-insecure-http" type="checkbox"> <span>Allow Plain HTTP for Non-Local Custom S3</span></label>
+          </div>
+
+          <div class="r2-callout" id="r2-callout">
+            <strong>Cloudflare R2 Compatibility &amp; Setup Tips:</strong>
+            <ul>
+              <li>In Cloudflare Dashboard, go to <strong>R2 &gt; Manage R2 API Tokens</strong> and create a token with <strong>Object Read &amp; Write</strong> (or <strong>Object Write</strong> for write-only archiving).</li>
+              <li>R2 encrypts all objects at rest automatically; AWS <code>x-amz-server-side-encryption</code> headers are automatically omitted for R2 per Cloudflare's S3 API spec.</li>
+              <li>Trace uploads include a <code>Content-MD5</code> digest for integrity verification and automatic collision-safe naming to respect R2's 1 write/sec/key limit (error <code>10058</code>).</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><span class="card-title">2. Path Template &amp; Export Mode</span></div>
+          <div class="form-grid">
+            <label>
+              <span>Default Prefix (<code>{prefix}</code>)</span>
+              <input id="cfg-prefix" type="text" placeholder="openrouter-traces">
+            </label>
+            <label>
+              <span>Path Template</span>
+              <input id="cfg-path-template" type="text" placeholder="openrouter-traces/{date}">
+            </label>
+          </div>
+          <div class="preset-row">
+            <span class="muted">Presets:</span>
+            <button type="button" class="chip preset-btn" data-tpl="openrouter-traces/{date}">openrouter-traces/{date}</button>
+            <button type="button" class="chip preset-btn" data-tpl="{apiKeyName}/{date}">{apiKeyName}/{date}</button>
+            <button type="button" class="chip preset-btn" data-tpl="traces/{year}/{month}/{day}">traces/{year}/{month}/{day}</button>
+            <button type="button" class="chip preset-btn" data-tpl="magpie/{agent}/{date}">magpie/{agent}/{date}</button>
+          </div>
+          <p class="preview-line">Example object key: <code id="path-preview">openrouter-traces/2026-11-18/trc_example-1763438700000.json</code></p>
+
+          <div class="form-grid" style="margin-top: 12px;">
+            <label>
+              <span>Export Mode</span>
+              <select id="cfg-export-mode">
+                <option value="single">Single Trace JSON ({traceId}-{timestamp}.json)</option>
+                <option value="batch">Batch Export (batch-{timestamp}.json with traces[])</option>
+              </select>
+            </label>
+            <label>
+              <span>Batch Max Traces</span>
+              <input id="cfg-batch-max" type="number" min="1" max="500">
+            </label>
+            <label>
+              <span>Batch Flush Interval (ms)</span>
+              <input id="cfg-batch-flush" type="number" min="1000" max="300000">
+            </label>
+            <label>
+              <span>S3 Request Timeout (ms)</span>
+              <input id="cfg-s3-timeout" type="number" min="500" max="30000">
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><span class="card-title">3. Input/Output Logging, Privacy &amp; Filters</span></div>
+          <div class="switches-grid">
+            <label class="switch-item"><input id="cfg-io-logging" type="checkbox"><span><strong>Input &amp; Output Logging</strong><small>Save normalized prompts, completions, and rawRequest/rawResponse payloads.</small></span></label>
+            <label class="switch-item"><input id="cfg-privacy-mode" type="checkbox"><span><strong>Privacy Mode</strong><small>Omit prompt/completion/error text and raw provider usage (metadata &amp; metrics only).</small></span></label>
+            <label class="switch-item"><input id="cfg-strip-multimodal" type="checkbox"><span><strong>Strip Base64 Multimodal Blobs</strong><small>Replace large inline images/documents with compact byte-size placeholders.</small></span></label>
+            <label class="switch-item"><input id="cfg-redact-secrets" type="checkbox"><span><strong>Redact API Keys &amp; Credentials</strong><small>Scrub Bearer tokens, sk- keys, AWS keys, and private keys before export.</small></span></label>
+            <label class="switch-item"><input id="cfg-capture-errors" type="checkbox"><span><strong>Capture Error Responses</strong><small>Sync failed model requests (4xx/5xx or stream errors) for debugging.</small></span></label>
+            <label class="switch-item"><input id="cfg-capture-remote" type="checkbox"><span><strong>Capture Remote / Shared Gateway Keys</strong><small>Include requests from non-local gateway keys or forwarded clients.</small></span></label>
+            <label class="switch-item"><input id="cfg-skip-subagents" type="checkbox"><span><strong>Skip Subagent Calls</strong><small>Ignore background subagent spawns when logging traces.</small></span></label>
+            <label class="switch-item"><input id="cfg-local-cache" type="checkbox"><span><strong>Keep Local Trace Cache</strong><small>Store recent traces locally in plugin-work/s3-trace-sync/recent-traces.jsonl for instant browsing.</small></span></label>
+          </div>
+
+          <div class="form-grid" style="margin-top: 14px;">
+            <label>
+              <span>Included API Keys <small class="muted">(comma-separated; blank = all)</small></span>
+              <input id="cfg-inc-keys" type="text" placeholder="e.g. prod-team, local">
+            </label>
+            <label>
+              <span>Excluded API Keys <small class="muted">(takes precedence over included)</small></span>
+              <input id="cfg-exc-keys" type="text" placeholder="e.g. guest-key">
+            </label>
+            <label>
+              <span>Skip Agents <small class="muted">(comma-separated)</small></span>
+              <input id="cfg-skip-agents" type="text" placeholder="e.g. translator">
+            </label>
+            <label>
+              <span>Excluded Models <small class="muted">(comma-separated)</small></span>
+              <input id="cfg-exc-models" type="text" placeholder="e.g. gpt-4o-mini">
+            </label>
+            <label>
+              <span>Max Local Cached Traces (10–5000)</span>
+              <input id="cfg-max-local" type="number" min="10" max="5000">
+            </label>
+          </div>
+        </div>
+
+        <div class="card settings-actions-card">
+          <div class="action-buttons">
+            <button id="btn-test-conn" class="btn btn-secondary" type="button">Test R2 / S3 Connection</button>
+            <button id="btn-save-cfg" class="btn btn-primary" type="submit">Save Configuration</button>
+            <button id="btn-flush-batch" class="btn btn-secondary" type="button">Flush Batch Now</button>
+            <button id="btn-clear-cache" class="btn btn-ghost" type="button">Clear Local Cache</button>
+            <button id="btn-reset-cfg" class="btn btn-ghost" type="button">Reset UI Overrides</button>
+          </div>
+          <div id="test-result" class="test-result" hidden></div>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <!-- TRACE / SESSION DETAIL DRAWER -->
+  <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+  <aside id="detail-drawer" class="drawer" hidden aria-label="Generation details">
+    <div class="drawer-head">
+      <div>
+        <h2 id="drawer-title">Generation Details</h2>
+        <p id="drawer-subtitle" class="muted"></p>
+      </div>
+      <div class="drawer-head-actions">
+        <button id="btn-drawer-push" class="btn btn-secondary btn-sm" type="button" hidden>Push to R2</button>
+        <button id="btn-drawer-copy" class="btn btn-secondary btn-sm" type="button">Copy JSON</button>
+        <button id="btn-drawer-download" class="btn btn-secondary btn-sm" type="button">Download</button>
+        <button id="btn-drawer-close" class="btn btn-ghost btn-sm" type="button" aria-label="Close">✕</button>
+      </div>
+    </div>
+    <div id="drawer-tabs" class="drawer-tabs">
+      <button class="dtab active" data-dtab="overview">Overview</button>
+      <button class="dtab" data-dtab="messages">Prompt &amp; Completion</button>
+      <button class="dtab" data-dtab="raw">Raw JSON</button>
+    </div>
+    <div id="drawer-body" class="drawer-body"></div>
+  </aside>
+</body>
+</html>

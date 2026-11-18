@@ -1,0 +1,99 @@
+{
+  "name": "s3-trace-sync",
+  "version": "0.1.0",
+  "description": "OpenRouter-style conversation trace sync and observability dashboard for Magpie Gateway — Cloudflare R2 (preferred) and S3-compatible storage with zero external dependencies.",
+  "type": "module",
+  "main": "./index.mjs",
+  "files": [
+    "index.mjs",
+    "server.mjs",
+    "s3-trace-sync.hooks.mjs",
+    "src",
+    "page",
+    "static",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20",
+    "magpie": ">=0.1.1340"
+  },
+  "keywords": [
+    "magpie",
+    "magpie-plugin",
+    "magpie-page",
+    "magpie-gateway",
+    "cloudflare-r2",
+    "r2",
+    "s3",
+    "openrouter",
+    "observability",
+    "tracing",
+    "logs"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leeeeeeeee2/s3-trace-sync.git"
+  },
+  "homepage": "https://github.com/leeeeeeeee2/s3-trace-sync#readme",
+  "bugs": {
+    "url": "https://github.com/leeeeeeeee2/s3-trace-sync/issues"
+  },
+  "magpie": {
+    "name": "S3 Trace Sync",
+    "summary": {
+      "en": "OpenRouter-style Logs, Activity, Sessions, and S3 Broadcast for Magpie conversations — Cloudflare R2 preferred, zero external dependencies, native AWS SigV4, Input/Output logging, privacy controls, and built-in dashboard."
+    },
+    "hooks": "./s3-trace-sync.hooks.mjs",
+    "page": {
+      "title": "S3 Trace Sync",
+      "file": "page/index.html",
+      "icon": "page/icon.svg",
+      "service": {
+        "port": 3483,
+        "option": "port"
+      },
+      "keepAlive": false
+    },
+    "permissions": [],
+    "options": {
+      "enabled": false,
+      "provider": "r2",
+      "accountId": "",
+      "r2Jurisdiction": "default",
+      "bucket": "",
+      "region": "auto",
+      "endpoint": "",
+      "storageClass": "STANDARD",
+      "accessKeyId": "",
+      "secretAccessKey": "",
+      "prefix": "openrouter-traces",
+      "pathTemplate": "openrouter-traces/{date}",
+      "exportMode": "single",
+      "batchMaxItems": 20,
+      "batchFlushIntervalMs": 10000,
+      "inputOutputLogging": true,
+      "privacyMode": false,
+      "stripMultimodal": true,
+      "redactSecrets": true,
+      "captureErrors": true,
+      "captureRemote": false,
+      "skipSubagents": false,
+      "includedApiKeys": [],
+      "excludedApiKeys": [],
+      "skipAgents": [],
+      "excludedModels": [],
+      "localCache": true,
+      "maxLocalTraces": 500,
+      "s3TimeoutMs": 8000,
+      "gatewayTimeoutMs": 10000,
+      "port": 3483
+    },
+    "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjggMTI4IiB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCI+CiAgPHJlY3QgeD0iNiIgeT0iNiIgd2lkdGg9IjExNiIgaGVpZ2h0PSIxMTYiIHJ4PSIyOCIgZmlsbD0iIzE4MTgxYiIvPgogIDxwYXRoIGQ9Ik0zOCA4Mmg1MGExNiAxNiAwIDAgMCAyLjUtMzEuOEEyNCAyNCAwIDAgMCA0My4yIDQ0IDE4IDE4IDAgMCAwIDM4IDgyWiIgZmlsbD0iI2YzODAyMCIgZmlsbC1vcGFjaXR5PSIwLjE4IiBzdHJva2U9IiNmMzgwMjAiIHN0cm9rZS13aWR0aD0iNiIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgogIDxwYXRoIGQ9Ik00NCA2NmgxMmw3LTE0IDkgMjQgNi0xMGgxMCIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjUuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBmaWxsPSJub25lIi8+CiAgPGNpcmNsZSBjeD0iOTMiIGN5PSI5MyIgcj0iMTQiIGZpbGw9IiMzYjgyZjYiIHN0cm9rZT0iIzE4MTgxYiIgc3Ryb2tlLXdpZHRoPSI1Ii8+CiAgPHBhdGggZD0iTTkzIDg3djEyTTg4IDk0bDUgNSA1LTUiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIzLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZmlsbD0ibm9uZSIvPgo8L3N2Zz4K"
+  }
+}
