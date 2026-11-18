@@ -215,18 +215,18 @@ Each trace file (`{traceId}-{timestamp}.json`) follows an OpenRouter Broadcast S
 ```json
 {
   "schema": "openrouter.broadcast.s3.v1",
-  "id": "msg_01XYZ...",
-  "name": "claude-sonnet-4-5",
+  "id": "chatcmpl_01XYZ...",
+  "name": "mistral-small-3.1-24b-instruct",
   "title": "Refactor the R2 retry queue",
   "timestamp": "2026-11-18T04:00:00.000Z",
   "sessionId": "ses_abc123",
   "apiKeyName": "local",
-  "agent": "claude",
-  "protocol": "anthropic",
+  "agent": "opencode",
+  "protocol": "chat",
   "status": "completed",
   "httpStatus": 200,
-  "model": "anthropic/claude-sonnet-4-5",
-  "provider": "anthropic",
+  "model": "mistralai/mistral-small-3.1-24b-instruct",
+  "provider": "mistral",
   "latencyMs": 1240,
   "ttftMs": 280,
   "routerTiming": {
@@ -242,20 +242,16 @@ Each trace file (`{traceId}-{timestamp}.json`) follows an OpenRouter Broadcast S
     "totalTokens": 1540,
     "promptTokensDetails": {
       "cachedTokens": 800,
-      "cacheWriteTokens": 200,
-      "cacheCreation": {
-        "ephemeral_5m_input_tokens": 200,
-        "ephemeral_1h_input_tokens": 0
-      }
+      "cacheWriteTokens": 0
     },
     "completionTokensDetails": {
       "reasoningTokens": 0
     }
   },
   "input": { "system": "...", "messages": [...] },
-  "output": { "messages": [...], "rawRequest": {...}, "rawResponse": {...} },
+  "output": { "messages": [...], "rawRequest": {...} },
   "trace": {
-    "id": "msg_01XYZ...",
+    "id": "chatcmpl_01XYZ...",
     "observations": [{ "type": "GENERATION", "..." : "..." }]
   }
 }
