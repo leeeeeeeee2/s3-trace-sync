@@ -28,26 +28,40 @@ test("Cloudflare R2 is the preferred default provider with auto region and endpo
   try {
     const cfg = resolveConfig({ stateDir: tmpDir }, {});
     assert.equal(cfg.provider, "r2");
+    assert.equal(cfg.bucket, "magpie-traces");
+    assert.equal(cfg.folder, "openrouter-traces");
+    assert.equal(cfg.pathTemplate, "{folder}/{date}");
+    assert.equal(cfg.tracePreset, "common");
+    assert.equal(cfg.traceFields.rawRequest, true);
+    assert.equal(cfg.traceFields.rawResponse, false);
     assert.equal(cfg.region, "auto");
     assert.equal(cfg.forcePathStyle, true);
     assert.equal(cfg.enabled, false);
     assert.equal(cfg.s3Configured, false);
 
-    // R2 environment variables automatically construct the endpoint and enable sync
+    // Custom folder & R2 environment variables automatically construct the endpoint and enable sync
     const envCfg = resolveConfig(
       { stateDir: tmpDir },
       {
         R2_ACCOUNT_ID: "0123456789abcdef0123456789abcdef",
-        R2_BUCKET: "magpie-traces",
         R2_ACCESS_KEY_ID: "ak_r2_test",
         R2_SECRET_ACCESS_KEY: "sk_r2_secret",
+        S3_TRACE_FOLDER: "claude-archives/prod",
       }
     );
     assert.equal(envCfg.provider, "r2");
+    assert.equal(envCfg.bucket, "magpie-traces");
+    assert.equal(envCfg.folder, "claude-archives/prod");
     assert.equal(envCfg.endpoint, "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com");
     assert.equal(envCfg.region, "auto");
     assert.equal(envCfg.enabled, true);
     assert.equal(envCfg.s3Configured, true);
+
+    const customKey = buildTraceObjectKey(envCfg, {
+      timestampMs: Date.UTC(2026, 10, 18, 4, 0, 0),
+      traceId: "trc_folder",
+    });
+    assert.equal(customKey, "claude-archives/prod/2026-11-18/trc_folder-1794974400000.json");
 
     const view = publicConfigView(envCfg);
     assert.equal(view.hasSecretAccessKey, true);

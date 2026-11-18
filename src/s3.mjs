@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import {
+  DEFAULT_FOLDER,
   DEFAULT_PATH_TEMPLATE,
   DEFAULT_PREFIX,
   validateBucketName,
@@ -388,7 +389,7 @@ function truncateKeyToUtf8Limit(key, maxBytes = MAX_OBJECT_KEY_BYTES) {
 
 /**
  * Render an OpenRouter-compatible S3 Path Template into a safe folder prefix.
- * Supported variables: {prefix}, {date}, {year}, {month}, {day}, {hour}, {apiKeyName}, {agent}, {provider}, {model}, {session}, {origin}.
+ * Supported variables: {folder}, {prefix}, {date}, {year}, {month}, {day}, {hour}, {apiKeyName}, {agent}, {provider}, {model}, {session}, {origin}.
  */
 export function renderPathTemplate(template, vars = {}) {
   const ts = vars.timestamp ? new Date(vars.timestamp) : new Date();
@@ -400,14 +401,16 @@ export function renderPathTemplate(template, vars = {}) {
   const day = iso.slice(8, 10);
   const hour = iso.slice(11, 13);
 
-  const prefixRaw = String(vars.prefix ?? DEFAULT_PREFIX)
+  const folderRaw = String(vars.folder ?? vars.prefix ?? DEFAULT_FOLDER ?? DEFAULT_PREFIX)
     .split("/")
     .map((seg) => sanitizeSegment(seg, ""))
     .filter(Boolean)
     .join("/");
+  const cleanFolder = folderRaw || DEFAULT_FOLDER;
 
   const replacements = {
-    prefix: prefixRaw || DEFAULT_PREFIX,
+    folder: cleanFolder,
+    prefix: cleanFolder,
     date,
     year,
     month,
@@ -442,7 +445,8 @@ export function renderPathTemplate(template, vars = {}) {
 export function buildTraceObjectKey(config, meta = {}) {
   const timestampMs = Number.isFinite(meta.timestampMs) ? Math.trunc(meta.timestampMs) : Date.now();
   const folder = renderPathTemplate(config.pathTemplate, {
-    prefix: config.prefix,
+    folder: config.folder || config.prefix,
+    prefix: config.prefix || config.folder,
     timestamp: timestampMs,
     apiKeyName: meta.isBatch ? "unknown" : meta.apiKeyName || "local",
     agent: meta.agent || "magpie",

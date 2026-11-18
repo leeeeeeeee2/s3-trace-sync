@@ -84,9 +84,9 @@ function summarizeTrace(trace) {
     stream: Boolean(trace.stream),
     status: trace.status || "completed",
     httpStatus: trace.httpStatus ?? 200,
-    model: trace.model,
-    requestedModel: trace.requestedModel || trace.model,
-    servedModel: trace.servedModel || trace.model,
+    model: trace.model || trace.name || "unknown",
+    requestedModel: trace.requestedModel || trace.model || trace.name || "unknown",
+    servedModel: trace.servedModel || trace.model || trace.name || "unknown",
     provider: trace.provider || "unknown",
     finishReason: trace.finishReason || null,
     latencyMs: trace.latencyMs ?? null,
@@ -627,8 +627,13 @@ export class TraceStore {
       const varIdx = rawTpl.indexOf("{");
       if (varIdx > 0) {
         listPrefix = rawTpl.slice(0, varIdx).replace(/^\/+|\/+$/g, "");
-      } else if (rawTpl.startsWith("{prefix}")) {
-        listPrefix = renderPathTemplate("{prefix}", { prefix: config.prefix });
+      } else if (rawTpl.startsWith("{folder}") || rawTpl.startsWith("{prefix}")) {
+        listPrefix = renderPathTemplate("{folder}", {
+          folder: config.folder || config.prefix,
+          prefix: config.prefix || config.folder,
+        });
+      } else if (varIdx < 0 && rawTpl) {
+        listPrefix = rawTpl.replace(/^\/+|\/+$/g, "");
       }
     }
 

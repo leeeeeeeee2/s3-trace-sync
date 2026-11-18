@@ -120,6 +120,99 @@ test("buildOpenRouterTrace normalizes Chat, Responses, Anthropic, and Gemini pro
   assert.equal(respTrace.usage.totalTokens, 15);
 });
 
+test("tracePreset and custom traceFields selectively include or omit fields", () => {
+  // Common default keeps rawRequest and omits rawResponse to avoid duplication
+  const commonCfg = resolveConfig({ ignoreOverlay: true });
+  assert.equal(commonCfg.tracePreset, "common");
+  const commonTrace = buildOpenRouterTrace({
+    requestBody: {
+      model: "claude-sonnet-4",
+      system: "System instructions",
+      temperature: 0.2,
+      messages: [{ role: "user", content: "Hello" }],
+      tools: [{ name: "ping", input_schema: { type: "object" } }],
+      trace: { env: "dev" },
+    },
+    replyBody: {
+      id: "msg_common",
+      model: "claude-sonnet-4",
+      stop_reason: "tool_use",
+      content: [
+        { type: "thinking", thinking: "Step 1" },
+        { type: "text", text: "Running tool" },
+        { type: "tool_use", id: "t1", name: "ping", input: {} },
+      ],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    },
+    ctx: { protocol: "anthropic", agent: "claude", origin: "local", session: "ses_c", success: true },
+    config: commonCfg,
+  });
+  assert.ok(commonTrace.output.rawRequest);
+  assert.equal(commonTrace.output.rawResponse, undefined);
+  assert.ok(commonTrace.trace.observations);
+
+  // Full preset adds rawResponse
+  const fullCfg = resolveConfig({ ignoreOverlay: true, tracePreset: "full" });
+  const fullTrace = buildOpenRouterTrace({
+    requestBody: { model: "gpt-4o", messages: [{ role: "user", content: "Hi" }] },
+    replyBody: {
+      id: "msg_full",
+      model: "gpt-4o",
+      choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Hey" } }],
+      usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    },
+    ctx: { protocol: "chat", agent: "opencode", origin: "local", success: true },
+    config: fullCfg,
+  });
+  assert.ok(fullTrace.output.rawResponse);
+
+  // Custom traceFields selectively omit systemPrompt, toolCalls, reasoning, timing, otelObservations
+  const customCfg = resolveConfig({
+    ignoreOverlay: true,
+    traceFields: {
+      systemPrompt: false,
+      toolCalls: false,
+      reasoning: false,
+      timing: false,
+      rawRequest: false,
+      otelObservations: false,
+      customMetadata: false,
+    },
+  });
+  assert.equal(customCfg.tracePreset, "custom");
+  const customTrace = buildOpenRouterTrace({
+    requestBody: {
+      model: "claude-sonnet-4",
+      system: "Huge system prompt",
+      messages: [{ role: "user", content: "Just the prompt" }],
+      tools: [{ name: "ping", input_schema: { type: "object" } }],
+    },
+    replyBody: {
+      id: "msg_custom",
+      model: "claude-sonnet-4",
+      stop_reason: "end_turn",
+      content: [
+        { type: "thinking", thinking: "Private thinking" },
+        { type: "text", text: "Clean answer" },
+        { type: "tool_use", id: "t2", name: "ping", input: {} },
+      ],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    },
+    ctx: { protocol: "anthropic", agent: "claude", origin: "local", success: true },
+    config: customCfg,
+  });
+  assert.equal(customTrace.input.system, undefined);
+  assert.equal(customTrace.output.messages[0].reasoning, undefined);
+  assert.equal(customTrace.output.messages[0].tool_calls, undefined);
+  assert.equal(customTrace.output.tools, undefined);
+  assert.equal(customTrace.output.rawRequest, undefined);
+  assert.equal(customTrace.latencyMs, undefined);
+  assert.equal(customTrace.routerTiming, undefined);
+  assert.equal(customTrace.metadata, undefined);
+  assert.equal(customTrace.trace, undefined);
+  assert.equal(customTrace.output.messages[0].content, "Clean answer");
+});
+
 test("Privacy Mode suppresses prompt, completion, error text, and raw usage while keeping metrics", () => {
   const cfg = resolveConfig({ ignoreOverlay: true, privacyMode: true, inputOutputLogging: true });
   const trace = buildOpenRouterTrace({

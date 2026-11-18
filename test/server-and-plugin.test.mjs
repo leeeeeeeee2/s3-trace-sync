@@ -116,7 +116,7 @@ test("Dashboard HTTP server enforces security headers, x-dash-key auth, CSV expo
       assert.ok(html.includes("window.__KEY__="));
       assert.match(htmlRes.headers.get("content-security-policy"), /frame-ancestors \*/);
 
-      // 6. Save R2 settings and ensure secret key is masked in GET /api/settings
+      // 6. Save R2 settings (custom folder + custom traceFields) and ensure secret key is masked
       const saveRes = await fetch(`${base}/api/settings`, {
         method: "POST",
         headers: { "x-dash-key": key, "content-type": "application/json" },
@@ -125,12 +125,22 @@ test("Dashboard HTTP server enforces security headers, x-dash-key auth, CSV expo
           provider: "r2",
           accountId: "myr2acct",
           bucket: "magpie-r2-logs",
+          folder: "team-a/traces",
+          pathTemplate: "{folder}/{date}",
+          traceFields: {
+            systemPrompt: false,
+            rawRequest: false,
+          },
           accessKeyId: "ak_demo",
           secretAccessKey: "super_secret_r2_key_value",
         }),
       }).then((r) => r.json());
       assert.equal(saveRes.ok, true);
       assert.equal(saveRes.config.provider, "r2");
+      assert.equal(saveRes.config.folder, "team-a/traces");
+      assert.equal(saveRes.config.tracePreset, "custom");
+      assert.equal(saveRes.config.traceFields.systemPrompt, false);
+      assert.equal(saveRes.config.traceFields.inputMessages, true);
       assert.equal(saveRes.config.endpoint, "https://myr2acct.r2.cloudflarestorage.com");
       assert.equal(saveRes.config.hasSecretAccessKey, true);
       assert.ok(!JSON.stringify(saveRes).includes("super_secret_r2_key_value"));
@@ -178,7 +188,9 @@ test("Dashboard HTTP server enforces security headers, x-dash-key auth, CSV expo
       }).then((r) => r.json());
       assert.equal(resetRes.ok, true);
       assert.equal(resetRes.config.provider, "r2");
-      assert.equal(resetRes.config.bucket, "");
+      assert.equal(resetRes.config.bucket, "magpie-traces");
+      assert.equal(resetRes.config.folder, "openrouter-traces");
+      assert.equal(resetRes.config.tracePreset, "common");
     } finally {
       await app.stop();
     }

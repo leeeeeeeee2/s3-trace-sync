@@ -482,8 +482,8 @@
           ? "Leave blank for https://storage.googleapis.com."
           : "Required for MinIO, Synology, Ceph, or self-hosted S3.";
     $("hint-bucket").textContent = isR2
-      ? "R2 rule (code 10005): 3–63 chars, lowercase letters, numbers, and hyphens."
-      : "Bucket name (3–63 chars).";
+      ? "Default: magpie-traces. R2 rule (code 10005): 3–63 chars, lowercase letters, numbers, and hyphens."
+      : "Default: magpie-traces. Bucket name (3–63 chars).";
   }
 
   function maybeAutoBuildR2Endpoint() {
@@ -501,13 +501,112 @@
     $("cfg-endpoint").value = `https://${host}`;
   }
 
+  const TRACE_PRESETS = {
+    common: {
+      timestamps: true,
+      session: true,
+      routing: true,
+      status: true,
+      timing: true,
+      usage: true,
+      modelParameters: true,
+      systemPrompt: true,
+      inputMessages: true,
+      outputMessages: true,
+      reasoning: true,
+      toolCalls: true,
+      rawRequest: true,
+      rawResponse: false,
+      rawUsage: true,
+      customMetadata: true,
+      otelObservations: true,
+    },
+    full: {
+      timestamps: true,
+      session: true,
+      routing: true,
+      status: true,
+      timing: true,
+      usage: true,
+      modelParameters: true,
+      systemPrompt: true,
+      inputMessages: true,
+      outputMessages: true,
+      reasoning: true,
+      toolCalls: true,
+      rawRequest: true,
+      rawResponse: true,
+      rawUsage: true,
+      customMetadata: true,
+      otelObservations: true,
+    },
+    minimal: {
+      timestamps: false,
+      session: true,
+      routing: true,
+      status: true,
+      timing: true,
+      usage: true,
+      modelParameters: false,
+      systemPrompt: false,
+      inputMessages: true,
+      outputMessages: true,
+      reasoning: false,
+      toolCalls: false,
+      rawRequest: false,
+      rawResponse: false,
+      rawUsage: false,
+      customMetadata: false,
+      otelObservations: false,
+    },
+  };
+
+  function detectTracePresetFromForm() {
+    const cur = collectTraceFieldsFromForm();
+    for (const name of ["common", "full", "minimal"]) {
+      const target = TRACE_PRESETS[name];
+      if (Object.keys(target).every((k) => Boolean(cur[k]) === Boolean(target[k]))) {
+        return name;
+      }
+    }
+    return "custom";
+  }
+
+  function collectTraceFieldsFromForm() {
+    const out = {};
+    document.querySelectorAll("[data-trace-field]").forEach((cb) => {
+      out[cb.dataset.traceField] = cb.checked;
+    });
+    return out;
+  }
+
+  function applyTraceFieldsToForm(fields = {}, explicitPreset = null) {
+    const merged = { ...TRACE_PRESETS.common, ...fields };
+    document.querySelectorAll("[data-trace-field]").forEach((cb) => {
+      cb.checked = Boolean(merged[cb.dataset.traceField]);
+    });
+    const preset = explicitPreset || detectTracePresetFromForm();
+    updateTracePresetBadge(preset);
+  }
+
+  function updateTracePresetBadge(preset) {
+    const badge = $("trace-preset-badge");
+    if (!badge) return;
+    if (preset === "common") badge.textContent = "Common (Default)";
+    else if (preset === "full") badge.textContent = "Full";
+    else if (preset === "minimal") badge.textContent = "Minimal";
+    else badge.textContent = "Custom";
+  }
+
   function updatePathPreview() {
-    const prefix = ($("cfg-prefix").value || "openrouter-traces").trim() || "openrouter-traces";
-    const tpl = ($("cfg-path-template").value || "openrouter-traces/{date}").trim() || "openrouter-traces/{date}";
+    const bucket = ($("cfg-bucket").value || "magpie-traces").trim() || "magpie-traces";
+    const folder = ($("cfg-folder").value || "openrouter-traces").trim().replace(/^\/+|\/+$/g, "") || "openrouter-traces";
+    const tpl = ($("cfg-path-template").value || "{folder}/{date}").trim() || "{folder}/{date}";
     const now = new Date();
     const iso = now.toISOString();
     const map = {
-      prefix: prefix.replace(/^\/+|\/+$/g, ""),
+      folder,
+      prefix: folder,
       date: iso.slice(0, 10),
       year: iso.slice(0, 4),
       month: iso.slice(5, 7),
@@ -527,7 +626,7 @@
       $("cfg-export-mode").value === "batch"
         ? `batch-${now.getTime()}.json`
         : `trc_demo-${now.getTime()}.json`;
-    $("path-preview").textContent = `${rendered}/${suffix}`;
+    $("path-preview").textContent = `${bucket}/${rendered ? `${rendered}/` : ""}${suffix}`;
   }
 
   function populateSettingsForm() {
@@ -536,7 +635,7 @@
     $("cfg-enabled").checked = Boolean(c.enabled);
     $("cfg-account-id").value = c.accountId || "";
     $("cfg-r2-jurisdiction").value = c.r2Jurisdiction || "default";
-    $("cfg-bucket").value = c.bucket || "";
+    $("cfg-bucket").value = c.bucket || "magpie-traces";
     $("cfg-region").value = c.region || (c.provider === "r2" ? "auto" : "us-east-1");
     $("cfg-endpoint").value = c.endpoint || "";
     $("cfg-ak").value = c.accessKeyId || "";
@@ -563,12 +662,14 @@
       $("hint-sk").textContent = "Stored locally in mode 0600 config.json; never returned to the browser.";
     }
 
-    $("cfg-prefix").value = c.prefix || "openrouter-traces";
-    $("cfg-path-template").value = c.pathTemplate || "openrouter-traces/{date}";
+    $("cfg-folder").value = c.folder || c.prefix || "openrouter-traces";
+    $("cfg-path-template").value = c.pathTemplate || "{folder}/{date}";
     $("cfg-export-mode").value = c.exportMode || "single";
     $("cfg-batch-max").value = c.batchMaxItems ?? 20;
     $("cfg-batch-flush").value = c.batchFlushIntervalMs ?? 10000;
     $("cfg-s3-timeout").value = c.s3TimeoutMs ?? 8000;
+
+    applyTraceFieldsToForm(c.traceFields, c.tracePreset);
 
     $("cfg-io-logging").checked = c.inputOutputLogging !== false;
     $("cfg-privacy-mode").checked = Boolean(c.privacyMode);
@@ -591,12 +692,15 @@
 
   function collectSettingsPayload() {
     const provider = document.querySelector(".provider-card.active")?.dataset.provider || "r2";
+    const folder = $("cfg-folder").value.trim() || "openrouter-traces";
+    const traceFields = collectTraceFieldsFromForm();
+    const tracePreset = detectTracePresetFromForm();
     const payload = {
       enabled: $("cfg-enabled").checked,
       provider,
       accountId: $("cfg-account-id").value.trim(),
       r2Jurisdiction: $("cfg-r2-jurisdiction").value,
-      bucket: $("cfg-bucket").value.trim(),
+      bucket: $("cfg-bucket").value.trim() || "magpie-traces",
       region: $("cfg-region").value.trim() || (provider === "r2" ? "auto" : "us-east-1"),
       endpoint: $("cfg-endpoint").value.trim(),
       accessKeyId: $("cfg-ak").value.trim(),
@@ -605,12 +709,15 @@
       sseKmsKeyId: $("cfg-sse-kms").value.trim(),
       forcePathStyle: $("cfg-path-style").checked,
       allowInsecureHttp: $("cfg-insecure-http").checked,
-      prefix: $("cfg-prefix").value.trim() || "openrouter-traces",
-      pathTemplate: $("cfg-path-template").value.trim() || "openrouter-traces/{date}",
+      folder,
+      prefix: folder,
+      pathTemplate: $("cfg-path-template").value.trim() || "{folder}/{date}",
       exportMode: $("cfg-export-mode").value,
       batchMaxItems: Number($("cfg-batch-max").value || 20),
       batchFlushIntervalMs: Number($("cfg-batch-flush").value || 10000),
       s3TimeoutMs: Number($("cfg-s3-timeout").value || 8000),
+      tracePreset,
+      traceFields,
       inputOutputLogging: $("cfg-io-logging").checked,
       privacyMode: $("cfg-privacy-mode").checked,
       stripMultimodal: $("cfg-strip-multimodal").checked,
@@ -650,8 +757,8 @@
   function renderTraceDrawer() {
     const t = state.drawerTrace;
     if (!t) return;
-    $("drawer-title").textContent = t.servedModel || t.model || "Generation Details";
-    $("drawer-subtitle").textContent = `${t.id} · ${fmtTime(t.timestamp)} · ${t.provider}`;
+    $("drawer-title").textContent = t.servedModel || t.model || t.name || "Generation Details";
+    $("drawer-subtitle").textContent = `${t.id} · ${fmtTime(t.timestamp)} · ${t.provider || "—"}`;
     $("drawer-tabs").hidden = false;
     $("btn-drawer-push").hidden = !state.config?.s3Configured;
     $("btn-drawer-push").textContent = state.config?.provider === "r2" ? "Push to R2" : "Push to S3";
@@ -727,11 +834,11 @@
 
     body.innerHTML = `
       <div class="kv-grid">
-        <div class="kv-box"><div class="k">Status</div><div class="v">${esc(t.status)} (HTTP ${esc(t.httpStatus)})</div></div>
-        <div class="kv-box"><div class="k">Model</div><div class="v">${esc(t.model)}</div></div>
-        <div class="kv-box"><div class="k">Provider / Upstream</div><div class="v">${esc(t.provider)}${t.upstream ? ` → ${esc(t.upstream)}` : ""}</div></div>
-        <div class="kv-box"><div class="k">Agent / Origin</div><div class="v">${esc(t.agent)} (${esc(t.origin)})</div></div>
-        <div class="kv-box"><div class="k">Gateway Key</div><div class="v">${esc(t.apiKeyName)}</div></div>
+        <div class="kv-box"><div class="k">Status</div><div class="v">${esc(t.status || "—")}${t.httpStatus ? ` (HTTP ${esc(t.httpStatus)})` : ""}</div></div>
+        <div class="kv-box"><div class="k">Model</div><div class="v">${esc(t.model || t.name || "—")}</div></div>
+        <div class="kv-box"><div class="k">Provider / Upstream</div><div class="v">${esc(t.provider || "—")}${t.upstream ? ` → ${esc(t.upstream)}` : ""}</div></div>
+        <div class="kv-box"><div class="k">Agent / Origin</div><div class="v">${esc(t.agent || "—")}${t.origin ? ` (${esc(t.origin)})` : ""}</div></div>
+        <div class="kv-box"><div class="k">Gateway Key</div><div class="v">${esc(t.apiKeyName || "—")}</div></div>
         <div class="kv-box"><div class="k">Finish Reason</div><div class="v">${esc(t.finishReason || "—")}</div></div>
         <div class="kv-box"><div class="k">Total Latency</div><div class="v">${esc(fmtDuration(t.latencyMs))}</div></div>
         <div class="kv-box"><div class="k">Time to First Token</div><div class="v">${esc(fmtDuration(t.ttftMs))}</div></div>
@@ -1056,7 +1163,8 @@
     $("wrap-sse-kms").hidden = activeProvider === "r2" || $("cfg-sse").value !== "aws:kms";
   });
 
-  $("cfg-prefix").addEventListener("input", updatePathPreview);
+  $("cfg-bucket").addEventListener("input", updatePathPreview);
+  $("cfg-folder").addEventListener("input", updatePathPreview);
   $("cfg-path-template").addEventListener("input", updatePathPreview);
   $("cfg-export-mode").addEventListener("change", updatePathPreview);
 
@@ -1064,6 +1172,21 @@
     btn.addEventListener("click", () => {
       $("cfg-path-template").value = btn.dataset.tpl;
       updatePathPreview();
+    });
+  });
+
+  document.querySelectorAll(".trace-preset-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const name = btn.dataset.tracePreset;
+      if (TRACE_PRESETS[name]) {
+        applyTraceFieldsToForm(TRACE_PRESETS[name], name);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-trace-field]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      updateTracePresetBadge(detectTracePresetFromForm());
     });
   });
 

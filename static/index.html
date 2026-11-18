@@ -312,8 +312,8 @@
             </label>
             <label>
               <span>Bucket Name</span>
-              <input id="cfg-bucket" type="text" placeholder="e.g. magpie-traces" autocomplete="off" spellcheck="false">
-              <small class="field-hint" id="hint-bucket">Lowercase letters, numbers, and hyphens (3–63 chars).</small>
+              <input id="cfg-bucket" type="text" placeholder="magpie-traces" autocomplete="off" spellcheck="false">
+              <small class="field-hint" id="hint-bucket">Default: <code>magpie-traces</code>. Lowercase letters, numbers, and hyphens (3–63 chars).</small>
             </label>
             <label>
               <span>Region</span>
@@ -380,25 +380,28 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><span class="card-title">2. Path Template &amp; Export Mode</span></div>
+          <div class="card-head"><span class="card-title">2. Storage Folder, Path Template &amp; Export Mode</span></div>
           <div class="form-grid">
             <label>
-              <span>Default Prefix (<code>{prefix}</code>)</span>
-              <input id="cfg-prefix" type="text" placeholder="openrouter-traces">
+              <span>Storage Folder (<code>{folder}</code>)</span>
+              <input id="cfg-folder" type="text" placeholder="openrouter-traces">
+              <small class="field-hint">Root folder inside your bucket where trace JSON files are stored.</small>
             </label>
             <label>
               <span>Path Template</span>
-              <input id="cfg-path-template" type="text" placeholder="openrouter-traces/{date}">
+              <input id="cfg-path-template" type="text" placeholder="{folder}/{date}">
+              <small class="field-hint">Use <code>{folder}</code> (flat) or add <code>{date}</code>, <code>{apiKeyName}</code>, <code>{agent}</code>, <code>{model}</code>.</small>
             </label>
           </div>
           <div class="preset-row">
             <span class="muted">Presets:</span>
-            <button type="button" class="chip preset-btn" data-tpl="openrouter-traces/{date}">openrouter-traces/{date}</button>
+            <button type="button" class="chip preset-btn" data-tpl="{folder}/{date}">{folder}/{date}</button>
+            <button type="button" class="chip preset-btn" data-tpl="{folder}">{folder} (flat)</button>
+            <button type="button" class="chip preset-btn" data-tpl="{folder}/{agent}/{date}">{folder}/{agent}/{date}</button>
             <button type="button" class="chip preset-btn" data-tpl="{apiKeyName}/{date}">{apiKeyName}/{date}</button>
             <button type="button" class="chip preset-btn" data-tpl="traces/{year}/{month}/{day}">traces/{year}/{month}/{day}</button>
-            <button type="button" class="chip preset-btn" data-tpl="magpie/{agent}/{date}">magpie/{agent}/{date}</button>
           </div>
-          <p class="preview-line">Example object key: <code id="path-preview">openrouter-traces/2026-11-18/trc_example-1763438700000.json</code></p>
+          <p class="preview-line">Example R2/S3 path: <code id="path-preview">magpie-traces/openrouter-traces/2026-11-18/trc_example-1763438700000.json</code></p>
 
           <div class="form-grid" style="margin-top: 12px;">
             <label>
@@ -424,7 +427,42 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><span class="card-title">3. Input/Output Logging, Privacy &amp; Filters</span></div>
+          <div class="card-head">
+            <div>
+              <span class="card-title">3. Traced JSON Fields</span>
+              <p class="muted">Choose which fields are recorded in each JSON file. Defaults to the balanced Common configuration.</p>
+            </div>
+            <span class="badge badge-r2" id="trace-preset-badge">Common (Default)</span>
+          </div>
+          <div class="preset-row" style="margin-top: 0; margin-bottom: 12px;">
+            <span class="muted">Field Presets:</span>
+            <button type="button" class="chip trace-preset-btn" data-trace-preset="common">Common (Default)</button>
+            <button type="button" class="chip trace-preset-btn" data-trace-preset="full">Full (With Raw Response)</button>
+            <button type="button" class="chip trace-preset-btn" data-trace-preset="minimal">Minimal (Compact)</button>
+          </div>
+          <div class="switches-grid" id="trace-fields-grid">
+            <label class="switch-item"><input type="checkbox" data-trace-field="timestamps"><span><strong>Timestamps</strong><small>Include <code>startTime</code> and <code>endTime</code> spans alongside <code>timestamp</code>.</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="session"><span><strong>Session &amp; User IDs</strong><small>Include <code>sessionId</code> and <code>userId</code> to group multi-turn threads.</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="routing"><span><strong>Model, Provider &amp; Agent Routing</strong><small>Include <code>model</code>, <code>provider</code>, <code>upstream</code>, <code>agent</code>, <code>protocol</code>, <code>apiKeyName</code>, and <code>origin</code>.</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="status"><span><strong>Status &amp; Finish Reason</strong><small>Include <code>status</code>, <code>httpStatus</code>, <code>finishReason</code>, and <code>errorType</code>.</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="timing"><span><strong>Latency &amp; Router Timing</strong><small>Include <code>latencyMs</code>, <code>ttftMs</code>, <code>flowMs</code>, and <code>routerTiming</code> waterfall.</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="usage"><span><strong>Token Usage &amp; Cache Details</strong><small>Include prompt, completion, cached read/write, and reasoning token counts.</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="modelParameters"><span><strong>Model Parameters</strong><small>Include sampling settings (<code>temperature</code>, <code>top_p</code>, <code>max_tokens</code>, <code>reasoning_effort</code>).</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="systemPrompt"><span><strong>System Prompt</strong><small>Include <code>input.system</code> and system messages (uncheck to save bucket space).</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="inputMessages"><span><strong>Input Messages</strong><small>Include normalized user and conversation history under <code>input.messages</code>.</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="outputMessages"><span><strong>Output Messages</strong><small>Include normalized assistant completion text under <code>output.messages</code>.</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="reasoning"><span><strong>Thinking / Reasoning Content</strong><small>Keep model reasoning/thinking blocks inside traced messages.</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="toolCalls"><span><strong>Tool Calls &amp; Definitions</strong><small>Include <code>tool_calls</code>, tool results, and <code>output.tools</code> schemas.</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="rawRequest"><span><strong>Raw Request Settings</strong><small>Include <code>output.rawRequest</code> (request metadata without duplicate messages).</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="rawResponse"><span><strong>Raw Provider Response</strong><small>Include full <code>output.rawResponse</code> payload (off in Common to avoid duplication).</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="rawUsage"><span><strong>Raw Provider Usage</strong><small>Include <code>upstream_raw_response_usage</code> inside generation metadata.</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="customMetadata"><span><strong>Custom Metadata</strong><small>Include custom request <code>trace</code> keys and Magpie metadata block.</small></span></label>
+            <label class="switch-item"><input type="checkbox" data-trace-field="otelObservations"><span><strong>OpenRouter Observations Block</strong><small>Include nested <code>trace.observations[]</code> span structure.</small></span></label>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><span class="card-title">4. Input/Output Logging, Privacy &amp; Filters</span></div>
           <div class="switches-grid">
             <label class="switch-item"><input id="cfg-io-logging" type="checkbox"><span><strong>Input &amp; Output Logging</strong><small>Save normalized prompts, completions, and rawRequest/rawResponse payloads.</small></span></label>
             <label class="switch-item"><input id="cfg-privacy-mode" type="checkbox"><span><strong>Privacy Mode</strong><small>Omit prompt/completion/error text and raw provider usage (metadata &amp; metrics only).</small></span></label>

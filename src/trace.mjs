@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { TRACE_FIELD_PRESETS } from "./config.mjs";
 
 const SECRET_PATTERNS = [
   [/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]"],
@@ -770,8 +771,27 @@ function deriveConversationTitle(reqInfo, query = "") {
   return "";
 }
 
+function filterTracedMessages(messages = [], { keepSystem = true, keepReasoning = true, keepTools = true } = {}) {
+  const out = [];
+  for (const m of messages) {
+    if (!m || typeof m !== "object") continue;
+    if (!keepSystem && (m.role === "system" || m.role === "developer")) continue;
+    if (!keepTools && m.role === "tool") continue;
+    const copy = { ...m };
+    if (!keepReasoning) delete copy.reasoning;
+    if (!keepTools) delete copy.tool_calls;
+    const hasContent = typeof copy.content === "string" && copy.content.trim() !== "";
+    const hasReasoning = typeof copy.reasoning === "string" && copy.reasoning.trim() !== "";
+    const hasToolCalls = Array.isArray(copy.tool_calls) && copy.tool_calls.length > 0;
+    if (!hasContent && !hasReasoning && !hasToolCalls) continue;
+    out.push(copy);
+  }
+  return out;
+}
+
 /**
- * Build an OpenRouter Broadcast S3-compatible Trace JSON document from Magpie hook data + optional ledger row.
+ * Build an OpenRouter Broadcast S3-compatible Trace JSON document from Magpie hook data + optional ledger row,
+ * honoring `config.traceFields` (defaulting to `TRACE_FIELD_PRESETS.common`).
  */
 export function buildOpenRouterTrace({
   requestBody,
@@ -780,8 +800,9 @@ export function buildOpenRouterTrace({
   startedAtMs,
   endedAtMs,
   ledger = null,
-  config,
+  config = {},
 }) {
+  const tf = { ...TRACE_FIELD_PRESETS.common, ...(config.traceFields || {}) };
   const startMs = Number.isFinite(startedAtMs) ? startedAtMs : Date.now();
   const endMs = Number.isFinite(endedAtMs) && endedAtMs >= startMs ? endedAtMs : Math.max(startMs, Date.now());
   const protocol = ctx.protocol || "chat";
@@ -839,7 +860,6 @@ export function buildOpenRouterTrace({
   const privacyMode = Boolean(config.privacyMode);
   const ioLogging = Boolean(config.inputOutputLogging) && !privacyMode;
 
-  // Custom metadata excluding reserved naming keys, merged with Magpie & OpenRouter generation metadata
   const customMetaRest = { ...customTrace };
   delete customMetaRest.trace_id;
   delete customMetaRest.trace_name;
@@ -852,88 +872,148 @@ export function buildOpenRouterTrace({
       ? { cache_creation: usage.promptTokensDetails.cacheCreation }
       : {}),
     usage_is_estimated: !resInfo.rawUsage && !ledger,
-    upstream_raw_response_usage: privacyMode
-      ? null
-      : resInfo.rawUsage
-        ? sanitizePayload(resInfo.rawUsage, sanitizeOpts)
-        : null,
-    ...(privacyMode ? { upstream_raw_response_usage_suppression_reason: "privacy_mode" } : {}),
+    ...(tf.rawUsage
+      ? {
+          upstream_raw_response_usage: privacyMode
+            ? null
+            : resInfo.rawUsage
+              ? sanitizePayload(resInfo.rawUsage, sanitizeOpts)
+              : null,
+          ...(privacyMode ? { upstream_raw_response_usage_suppression_reason: "privacy_mode" } : {}),
+        }
+      : {}),
   };
 
-  const metadata = {
-    ...customMetaRest,
-    source: "magpie-s3-trace-sync",
-    agent: ctx.agent || "unknown",
-    origin: ctx.origin || "unknown",
-    protocol,
-    kind: ctx.kind || "main",
-    ...(ctx.cwd ? { cwdHash: sha256Short(ctx.cwd) } : {}),
-    hasTools: reqInfo.hasTools,
-    toolDefinitionsCount: reqInfo.toolDefinitionsCount,
-    toolCallsCount: resInfo.toolCallsCount,
-    ...(ledger?.tierServed ? { serviceTier: ledger.tierServed } : {}),
-    openrouter_generation: openrouterGenerationMeta,
-  };
+  const metadata = tf.customMetadata
+    ? {
+        ...customMetaRest,
+        source: "magpie-s3-trace-sync",
+        ...(tf.routing
+          ? {
+              agent: ctx.agent || "unknown",
+              origin: ctx.origin || "unknown",
+              protocol,
+              kind: ctx.kind || "main",
+              ...(ctx.cwd ? { cwdHash: sha256Short(ctx.cwd) } : {}),
+              ...(ledger?.tierServed ? { serviceTier: ledger.tierServed } : {}),
+            }
+          : {}),
+        ...(tf.toolCalls
+          ? {
+              hasTools: reqInfo.hasTools,
+              toolDefinitionsCount: reqInfo.toolDefinitionsCount,
+              toolCallsCount: resInfo.toolCallsCount,
+            }
+          : {}),
+        openrouter_generation: openrouterGenerationMeta,
+      }
+    : undefined;
 
-  // Follow OpenRouter Broadcast S3 rule for `tools`: when model called tools, move `tools` from rawRequest to output.tools.
+  const msgFilterOpts = {
+    keepSystem: tf.systemPrompt,
+    keepReasoning: tf.reasoning,
+    keepTools: tf.toolCalls,
+  };
+  const filteredInputMsgs = tf.inputMessages ? filterTracedMessages(reqInfo.messages, msgFilterOpts) : [];
+  const filteredOutputMsgs = tf.outputMessages ? filterTracedMessages(resInfo.messages, msgFilterOpts) : [];
+
   const rawReqOut = { ...reqInfo.rawRequest };
+  if (!tf.systemPrompt) {
+    delete rawReqOut.system;
+    delete rawReqOut.instructions;
+    delete rawReqOut.systemInstruction;
+  }
+  if (!tf.toolCalls) {
+    delete rawReqOut.tools;
+    delete rawReqOut.tool_choice;
+    delete rawReqOut.functions;
+    delete rawReqOut.function_call;
+    delete rawReqOut.toolConfig;
+  }
+
   let outputTools;
-  if (resInfo.toolCallsCount > 0 && reqInfo.tools) {
+  if (tf.toolCalls && resInfo.toolCallsCount > 0 && reqInfo.tools) {
     delete rawReqOut.tools;
     outputTools = reqInfo.tools;
   }
 
-  const inputSection = ioLogging
-    ? {
-        ...(reqInfo.system ? { system: reqInfo.system } : {}),
-        messages: reqInfo.messages,
-      }
-    : null;
+  const inputSection =
+    ioLogging && (tf.systemPrompt || tf.inputMessages)
+      ? {
+          ...(tf.systemPrompt && reqInfo.system ? { system: reqInfo.system } : {}),
+          ...(tf.inputMessages ? { messages: filteredInputMsgs } : {}),
+        }
+      : null;
 
-  const outputSection = ioLogging
-    ? {
-        messages: resInfo.messages,
-        ...(outputTools ? { tools: outputTools } : {}),
-        rawRequest: rawReqOut,
-        ...(resInfo.rawResponse ? { rawResponse: resInfo.rawResponse } : {}),
-        ...(!isSuccess && (resInfo.errorText || ledger?.errorMessage)
-          ? { error: scrubSecretsInText(resInfo.errorText || ledger.errorMessage) }
-          : {}),
-      }
-    : null;
+  const outputSection =
+    ioLogging && (tf.outputMessages || tf.rawRequest || tf.rawResponse)
+      ? {
+          ...(tf.outputMessages ? { messages: filteredOutputMsgs } : {}),
+          ...(outputTools ? { tools: outputTools } : {}),
+          ...(tf.rawRequest ? { rawRequest: rawReqOut } : {}),
+          ...(tf.rawResponse && resInfo.rawResponse ? { rawResponse: resInfo.rawResponse } : {}),
+          ...(tf.status && !isSuccess && (resInfo.errorText || ledger?.errorMessage)
+            ? { error: scrubSecretsInText(resInfo.errorText || ledger.errorMessage) }
+            : {}),
+        }
+      : null;
 
   const startIso = new Date(startMs).toISOString();
   const endIso = new Date(endMs).toISOString();
 
-  const observationId = `obs_${sha256Short(`${traceId}:${startMs}`)}`;
-  const generationObservation = {
-    id: observationId,
-    traceId,
-    ...(customTrace.parent_span_id ? { parentObservationId: String(customTrace.parent_span_id) } : {}),
-    type: "GENERATION",
-    name: generationName,
-    model: modelSlug,
-    provider,
-    startTime: startIso,
-    endTime: endIso,
-    completionStartTime: ttftMs !== null ? new Date(startMs + ttftMs).toISOString() : null,
-    promptTokens: usage.promptTokens,
-    completionTokens: usage.completionTokens,
-    totalTokens: usage.totalTokens,
-    promptTokensDetails: usage.promptTokensDetails,
-    completionTokensDetails: usage.completionTokensDetails,
-    inputCost: usage.inputCost,
-    outputCost: usage.outputCost,
-    totalCost: usage.totalCost,
-    modelParameters: reqInfo.modelParameters,
-    finishReason: resInfo.finishReason,
-    statusMessage: !isSuccess && !privacyMode ? scrubSecretsInText(resInfo.errorText || ledger?.errorMessage || "") || null : null,
-    input: ioLogging ? reqInfo.messages : null,
-    output: ioLogging ? resInfo.messages : null,
-    metadata,
-  };
+  let traceBlock;
+  if (tf.otelObservations) {
+    const observationId = `obs_${sha256Short(`${traceId}:${startMs}`)}`;
+    const generationObservation = {
+      id: observationId,
+      traceId,
+      ...(customTrace.parent_span_id ? { parentObservationId: String(customTrace.parent_span_id) } : {}),
+      type: "GENERATION",
+      name: generationName,
+      ...(tf.routing ? { model: modelSlug, provider } : {}),
+      ...(tf.timestamps ? { startTime: startIso, endTime: endIso } : {}),
+      ...(tf.timing
+        ? { completionStartTime: ttftMs !== null ? new Date(startMs + ttftMs).toISOString() : null }
+        : {}),
+      ...(tf.usage
+        ? {
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            totalTokens: usage.totalTokens,
+            promptTokensDetails: usage.promptTokensDetails,
+            completionTokensDetails: usage.completionTokensDetails,
+            inputCost: usage.inputCost,
+            outputCost: usage.outputCost,
+            totalCost: usage.totalCost,
+          }
+        : {}),
+      ...(tf.modelParameters ? { modelParameters: reqInfo.modelParameters } : {}),
+      ...(tf.status
+        ? {
+            finishReason: resInfo.finishReason,
+            statusMessage:
+              !isSuccess && !privacyMode
+                ? scrubSecretsInText(resInfo.errorText || ledger?.errorMessage || "") || null
+                : null,
+          }
+        : {}),
+      input: ioLogging && tf.inputMessages ? filteredInputMsgs : null,
+      output: ioLogging && tf.outputMessages ? filteredOutputMsgs : null,
+      ...(metadata ? { metadata } : {}),
+    };
 
-  const title = ioLogging ? deriveConversationTitle(reqInfo, ctx.query) : "";
+    traceBlock = {
+      id: traceId,
+      name: traceName,
+      ...(tf.session ? { userId, sessionId } : {}),
+      ...(tf.timestamps ? { startTime: startIso, endTime: endIso } : {}),
+      ...(tf.timing ? { routerTiming } : {}),
+      ...(metadata ? { metadata } : {}),
+      observations: [generationObservation],
+    };
+  }
+
+  const title = ioLogging && tf.inputMessages ? deriveConversationTitle(reqInfo, ctx.query) : "";
 
   return {
     schema: "openrouter.broadcast.s3.v1",
@@ -941,47 +1021,47 @@ export function buildOpenRouterTrace({
     name: traceName,
     ...(title ? { title } : {}),
     timestamp: endIso,
-    startTime: startIso,
-    endTime: endIso,
-    userId,
-    sessionId,
-    gatewayKey: apiKeyName,
-    apiKeyName,
-    origin: ctx.origin || "local",
-    agent: ctx.agent || "unknown",
-    protocol,
-    path: ctx.path || "",
-    stream: Boolean(ctx.stream),
-    status,
-    httpStatus,
-    ...(ledger?.errorType ? { errorType: ledger.errorType } : {}),
-    model: modelSlug,
-    requestedModel,
-    servedModel,
-    provider,
-    upstream: ledger?.upstream || null,
-    finishReason: resInfo.finishReason,
-    latencyMs,
-    ttftMs,
-    ...(ledger?.flowMs ? { flowMs: ledger.flowMs } : {}),
-    modelParameters: reqInfo.modelParameters,
-    routerTiming,
-    usage,
+    ...(tf.timestamps ? { startTime: startIso, endTime: endIso } : {}),
+    ...(tf.session ? { userId, sessionId } : {}),
+    ...(tf.routing
+      ? {
+          gatewayKey: apiKeyName,
+          apiKeyName,
+          origin: ctx.origin || "local",
+          agent: ctx.agent || "unknown",
+          protocol,
+          path: ctx.path || "",
+          stream: Boolean(ctx.stream),
+          model: modelSlug,
+          requestedModel,
+          servedModel,
+          provider,
+          upstream: ledger?.upstream || null,
+        }
+      : {}),
+    ...(tf.status
+      ? {
+          status,
+          httpStatus,
+          ...(ledger?.errorType ? { errorType: ledger.errorType } : {}),
+          finishReason: resInfo.finishReason,
+        }
+      : {}),
+    ...(tf.timing
+      ? {
+          latencyMs,
+          ttftMs,
+          ...(ledger?.flowMs ? { flowMs: ledger.flowMs } : {}),
+          routerTiming,
+        }
+      : {}),
+    ...(tf.modelParameters ? { modelParameters: reqInfo.modelParameters } : {}),
+    ...(tf.usage ? { usage } : {}),
     privacyMode,
     inputOutputLogging: ioLogging,
     input: inputSection,
     output: outputSection,
-    metadata,
-    trace: {
-      id: traceId,
-      name: traceName,
-      userId,
-      sessionId,
-      startTime: startIso,
-      endTime: endIso,
-      routerTiming,
-      metadata,
-      observations: [generationObservation],
-    },
+    ...(metadata ? { metadata } : {}),
+    ...(traceBlock ? { trace: traceBlock } : {}),
   };
 }

@@ -64,9 +64,11 @@ magpie plugin options s3-trace-sync '{
   "provider": "r2",
   "accountId": "<YOUR_CLOUDFLARE_ACCOUNT_ID>",
   "bucket": "magpie-traces",
+  "folder": "openrouter-traces",
+  "pathTemplate": "{folder}/{date}",
+  "tracePreset": "common",
   "accessKeyId": "<R2_ACCESS_KEY_ID>",
-  "secretAccessKey": "<R2_SECRET_ACCESS_KEY>",
-  "pathTemplate": "openrouter-traces/{date}"
+  "secretAccessKey": "<R2_SECRET_ACCESS_KEY>"
 }'
 ```
 
@@ -78,7 +80,9 @@ environment:
   R2_BUCKET: "magpie-traces"
   R2_ACCESS_KEY_ID: "<R2_ACCESS_KEY_ID>"
   R2_SECRET_ACCESS_KEY: "<R2_SECRET_ACCESS_KEY>"
-  S3_TRACE_PATH_TEMPLATE: "openrouter-traces/{date}"
+  S3_TRACE_FOLDER: "openrouter-traces"
+  S3_TRACE_PATH_TEMPLATE: "{folder}/{date}"
+  S3_TRACE_PRESET: "common"
 ```
 
 ---
@@ -87,7 +91,7 @@ environment:
 
 1. **Create an R2 Bucket**:
    - In the Cloudflare Dashboard, go to **R2 Object Storage > Create bucket**.
-   - Use a lowercase alphanumeric/hyphen bucket name (3–63 characters, e.g., `magpie-traces`).
+   - Create a bucket (the plugin defaults to `magpie-traces`; any lowercase alphanumeric/hyphen name of 3–63 characters works).
 2. **Create an R2 API Token**:
    - Go to **R2 > Manage R2 API Tokens > Create API token**.
    - Grant **Object Read & Write** (recommended if you also want to use **Pull from R2** to browse historical traces from multiple machines) or **Object Write** (write-only archiving), scoped to your bucket.
@@ -95,8 +99,9 @@ environment:
 3. **Configure in Magpie**:
    - Open **S3 Trace Sync > Broadcast & R2**.
    - Ensure **Cloudflare R2 (Preferred)** is selected.
-   - Enter your **Cloudflare Account ID** (endpoint auto-fills to `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`), **Bucket Name**, **Access Key ID**, and **Secret Access Key**.
-   - Click **Test R2 / S3 Connection** — this writes `.openrouter-connection-test.json` under your configured path template.
+   - Enter your **Cloudflare Account ID** (endpoint auto-fills to `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`), **Bucket Name** (pre-filled as `magpie-traces`), **Access Key ID**, and **Secret Access Key**.
+   - Adjust **Storage Folder** (defaults to `openrouter-traces` with path template `{folder}/{date}`) and **Traced JSON Fields** (defaults to the **`common`** preset) if needed.
+   - Click **Test R2 / S3 Connection** — this writes `.openrouter-connection-test.json` under your configured folder/path template.
    - Toggle **Enable Conversation Trace Sync** on and click **Save Configuration**.
 
 ---
@@ -121,7 +126,7 @@ Settings are resolved in this order (highest precedence first):
 1. **Local Web UI Configuration** (`<magpie-config>/plugin-work/s3-trace-sync/config.json`, saved with mode `0600`)
 2. **Magpie Plugin Options** (`plugins.json` via `magpie plugin options s3-trace-sync '{...}'`)
 3. **Environment Variables**
-4. **Built-in Defaults** (`provider: "r2"`, `region: "auto"`, `pathTemplate: "openrouter-traces/{date}"`)
+4. **Built-in Defaults** (`provider: "r2"`, `region: "auto"`, `bucket: "magpie-traces"`, `folder: "openrouter-traces"`, `pathTemplate: "{folder}/{date}"`, `tracePreset: "common"`)
 
 ### Environment Variables
 
@@ -129,15 +134,18 @@ Settings are resolved in this order (highest precedence first):
 | --- | --- | --- |
 | `R2_ACCOUNT_ID` | `CLOUDFLARE_ACCOUNT_ID`, `S3_TRACE_ACCOUNT_ID`, `BACKUP_S3_ACCOUNT_ID` | Cloudflare Account ID used to construct the R2 S3 endpoint |
 | `R2_JURISDICTION` | `S3_TRACE_R2_JURISDICTION` | `default`, `eu`, or `fedramp` |
-| `R2_BUCKET` | `S3_TRACE_BUCKET`, `BACKUP_S3_BUCKET` | Target bucket name |
+| `R2_BUCKET` | `S3_TRACE_BUCKET`, `BACKUP_S3_BUCKET` | Target bucket name (default: `magpie-traces`) |
 | `R2_ENDPOINT` | `S3_TRACE_ENDPOINT`, `BACKUP_S3_ENDPOINT` | Explicit S3 endpoint URL (optional when `R2_ACCOUNT_ID` is set) |
 | `R2_ACCESS_KEY_ID` | `S3_TRACE_ACCESS_KEY_ID`, `BACKUP_S3_AK`, `AWS_ACCESS_KEY_ID` | S3 / R2 Access Key ID |
 | `R2_SECRET_ACCESS_KEY` | `S3_TRACE_SECRET_ACCESS_KEY`, `BACKUP_S3_SK`, `AWS_SECRET_ACCESS_KEY` | S3 / R2 Secret Access Key |
-| `S3_TRACE_ENABLED` | — | `"true"` or `"false"` (auto-enabled if bucket + AK + SK + endpoint/accountId are provided via env) |
+| `S3_TRACE_ENABLED` | — | `"true"` or `"false"` (auto-enabled if AK + SK + endpoint/accountId are provided via env; uses default bucket `magpie-traces` unless overridden) |
 | `S3_TRACE_PROVIDER` | — | `r2` (default), `aws`, `gcs`, or `custom` |
 | `S3_TRACE_REGION` | `BACKUP_S3_REGION`, `AWS_REGION` | Defaults to `auto` for R2/GCS, `us-east-1` for AWS/Custom |
 | `S3_TRACE_STORAGE_CLASS` | — | `STANDARD` (default) or `STANDARD_IA` |
-| `S3_TRACE_PATH_TEMPLATE` | — | Default: `openrouter-traces/{date}` |
+| `S3_TRACE_FOLDER` | `S3_TRACE_PREFIX` | Base folder inside the bucket for JSON traces (default: `openrouter-traces`) |
+| `S3_TRACE_PATH_TEMPLATE` | — | Object key folder layout template (default: `{folder}/{date}`) |
+| `S3_TRACE_PRESET` | — | Field selection preset: `common` (default), `full`, `minimal`, or `custom` |
+| `S3_TRACE_FIELDS` | — | JSON object (e.g. `'{"rawRequest":false}'`) or comma-separated list of fields to enable on top of `minimal` |
 | `S3_TRACE_EXPORT_MODE` | — | `single` (default) or `batch` |
 | `S3_TRACE_IO_LOGGING` | — | `"true"` (default) or `"false"` |
 | `S3_TRACE_PRIVACY_MODE` | — | `"false"` (default) or `"true"` |
@@ -148,9 +156,9 @@ Settings are resolved in this order (highest precedence first):
 
 ### Path Template Variables
 
-Customize how traces are stored in your R2/S3 bucket:
+Customize both the target `bucket` (default: `magpie-traces`), base `folder` (default: `openrouter-traces`), and subdirectory layout inside your R2/S3 bucket:
 
-- `{prefix}` — configured base prefix (default: `openrouter-traces`)
+- `{folder}` (alias `{prefix}`) — configured storage folder inside the bucket (default: `openrouter-traces`)
 - `{date}` — UTC date (`YYYY-MM-DD`)
 - `{year}`, `{month}`, `{day}`, `{hour}` — UTC date/time segments
 - `{apiKeyName}` — Magpie caller gateway key name (or `local`, `unknown` for batches/connection tests)
@@ -161,16 +169,48 @@ Customize how traces are stored in your R2/S3 bucket:
 - `{origin}` — `local`, `magpie-key`, `gateway-key`, or `remote`
 
 Preset examples:
-- `openrouter-traces/{date}`
-- `{apiKeyName}/{date}`
-- `traces/{year}/{month}/{day}`
-- `magpie/{agent}/{date}`
+- `{folder}/{date}`
+- `{folder}` (flat folder storage)
+- `{folder}/{agent}/{date}`
+- `{folder}/{apiKeyName}/{date}`
+- `{folder}/{year}/{month}/{day}`
+
+### Traced JSON Fields (`tracePreset` & `traceFields`)
+
+Control exactly which sections are written into each uploaded trace JSON document:
+
+- **`common` (default)** — Balanced OpenRouter observability payload. Includes `timestamps`, `session`, `routing`, `status`, `timing`, `usage`, `modelParameters`, `systemPrompt`, `inputMessages`, `outputMessages`, `reasoning`, `toolCalls`, `rawRequest`, `rawUsage`, `customMetadata`, and `otelObservations`, while disabling `rawResponse` by default to avoid duplicating normalized `output.messages` and inflating R2/S3 storage.
+- **`full`** — Enables all 17 fields including raw upstream `rawResponse`.
+- **`minimal`** — Compact trace keeping core identifiers alongside `timestamps`, `status`, `usage`, `inputMessages`, and `outputMessages`.
+- **`custom`** — Any individual combination toggled in the Settings UI under **3. Traced JSON Fields** or passed via `traceFields` / `S3_TRACE_FIELDS`.
+
+Available `traceFields` toggles:
+
+| Field | `common` (default) | `full` | `minimal` | Description |
+| --- | --- | --- | --- | --- |
+| `timestamps` | `true` | `true` | `true` | `startTime`, `endTime` (`timestamp` is always included) |
+| `session` | `true` | `true` | `false` | `userId`, `sessionId` |
+| `routing` | `true` | `true` | `false` | `gatewayKey`, `apiKeyName`, `origin`, `agent`, `protocol`, `path`, `stream`, `model`, `requestedModel`, `servedModel`, `provider`, `upstream` |
+| `status` | `true` | `true` | `true` | `status`, `httpStatus`, `errorType`, `finishReason`, `output.error` |
+| `timing` | `true` | `true` | `false` | `latencyMs`, `ttftMs`, `flowMs`, `routerTiming` |
+| `usage` | `true` | `true` | `true` | Normalized `usage` token counts & cost fields |
+| `modelParameters` | `true` | `true` | `false` | `modelParameters` (`temperature`, `max_tokens`, etc.) |
+| `systemPrompt` | `true` | `true` | `false` | Extracted `input.system`, system-role messages, and system fields inside `output.rawRequest` |
+| `inputMessages` | `true` | `true` | `true` | Normalized `input.messages` (and conversation `title` derivation) |
+| `outputMessages` | `true` | `true` | `true` | Normalized `output.messages` |
+| `reasoning` | `true` | `true` | `false` | Reasoning / thinking blocks within `input.messages` and `output.messages` |
+| `toolCalls` | `true` | `true` | `false` | Tool/function calls & schemas (`output.tools`, tool blocks in messages, `tools` inside `output.rawRequest`) |
+| `rawRequest` | `true` | `true` | `false` | Sanitized `output.rawRequest` request payload |
+| `rawResponse` | `false` | `true` | `false` | Sanitized `output.rawResponse` response payload (disabled in `common` by default) |
+| `rawUsage` | `true` | `true` | `false` | `metadata.openrouter_generation.upstream_raw_response_usage` |
+| `customMetadata` | `true` | `true` | `false` | `metadata` (`source`, `agent`, `origin`, `protocol`, `cwdHash`, `openrouter_generation`, custom OpenRouter metadata) |
+| `otelObservations` | `true` | `true` | `false` | OpenRouter/OTel generation span in `trace.observations` |
 
 ---
 
 ## Trace JSON Schema & Querying with DuckDB / Athena
 
-Each trace file (`{traceId}-{timestamp}.json`) follows an OpenRouter Broadcast S3 structure (`schema: "openrouter.broadcast.s3.v1"`):
+Each trace file (`{traceId}-{timestamp}.json`) follows an OpenRouter Broadcast S3 structure (`schema: "openrouter.broadcast.s3.v1"`). By default (`tracePreset: "common"`), `output.rawRequest` is included while `output.rawResponse` is omitted unless `rawResponse` (or `tracePreset: "full"`) is enabled:
 
 ```json
 {

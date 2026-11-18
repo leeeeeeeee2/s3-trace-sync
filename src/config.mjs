@@ -4,20 +4,103 @@ import os from "node:os";
 import path from "node:path";
 
 export const DEFAULT_PORT = 3483;
-export const DEFAULT_PATH_TEMPLATE = "openrouter-traces/{date}";
-export const DEFAULT_PREFIX = "openrouter-traces";
+export const DEFAULT_BUCKET = "magpie-traces";
+export const DEFAULT_FOLDER = "openrouter-traces";
+export const DEFAULT_PREFIX = DEFAULT_FOLDER;
+export const DEFAULT_PATH_TEMPLATE = "{folder}/{date}";
 // Cloudflare R2 is the preferred default S3-compatible provider.
 export const PROVIDERS = ["r2", "aws", "gcs", "custom"];
 export const R2_JURISDICTIONS = ["default", "eu", "fedramp"];
 export const STORAGE_CLASSES = ["STANDARD", "STANDARD_IA"];
 export const EXPORT_MODES = ["single", "batch"];
+export const TRACE_PRESET_NAMES = ["common", "full", "minimal", "custom"];
+
+export const TRACE_FIELD_KEYS = Object.freeze([
+  "timestamps",
+  "session",
+  "routing",
+  "status",
+  "timing",
+  "usage",
+  "modelParameters",
+  "systemPrompt",
+  "inputMessages",
+  "outputMessages",
+  "reasoning",
+  "toolCalls",
+  "rawRequest",
+  "rawResponse",
+  "rawUsage",
+  "customMetadata",
+  "otelObservations",
+]);
+
+export const TRACE_FIELD_PRESETS = Object.freeze({
+  common: Object.freeze({
+    timestamps: true,
+    session: true,
+    routing: true,
+    status: true,
+    timing: true,
+    usage: true,
+    modelParameters: true,
+    systemPrompt: true,
+    inputMessages: true,
+    outputMessages: true,
+    reasoning: true,
+    toolCalls: true,
+    rawRequest: true,
+    rawResponse: false,
+    rawUsage: true,
+    customMetadata: true,
+    otelObservations: true,
+  }),
+  full: Object.freeze({
+    timestamps: true,
+    session: true,
+    routing: true,
+    status: true,
+    timing: true,
+    usage: true,
+    modelParameters: true,
+    systemPrompt: true,
+    inputMessages: true,
+    outputMessages: true,
+    reasoning: true,
+    toolCalls: true,
+    rawRequest: true,
+    rawResponse: true,
+    rawUsage: true,
+    customMetadata: true,
+    otelObservations: true,
+  }),
+  minimal: Object.freeze({
+    timestamps: false,
+    session: true,
+    routing: true,
+    status: true,
+    timing: true,
+    usage: true,
+    modelParameters: false,
+    systemPrompt: false,
+    inputMessages: true,
+    outputMessages: true,
+    reasoning: false,
+    toolCalls: false,
+    rawRequest: false,
+    rawResponse: false,
+    rawUsage: false,
+    customMetadata: false,
+    otelObservations: false,
+  }),
+});
 
 export const DEFAULT_OPTIONS = Object.freeze({
   enabled: false,
   provider: "r2", // Preferred: Cloudflare R2 S3-compatible storage
   accountId: "", // Cloudflare Account ID (auto-builds https://<ACCOUNT_ID>.r2.cloudflarestorage.com)
   r2Jurisdiction: "default", // "default" | "eu" | "fedramp"
-  bucket: "",
+  bucket: DEFAULT_BUCKET,
   region: "auto",
   endpoint: "",
   forcePathStyle: true,
@@ -28,11 +111,14 @@ export const DEFAULT_OPTIONS = Object.freeze({
   storageClass: "STANDARD", // R2 supports STANDARD and STANDARD_IA
   sse: "none", // AWS/Custom only ("none" | "AES256" | "aws:kms"); R2 encrypts at rest automatically
   sseKmsKeyId: "",
+  folder: DEFAULT_FOLDER,
   prefix: DEFAULT_PREFIX,
   pathTemplate: DEFAULT_PATH_TEMPLATE,
   exportMode: "single", // "single" | "batch"
   batchMaxItems: 20,
   batchFlushIntervalMs: 10000,
+  tracePreset: "common",
+  traceFields: TRACE_FIELD_PRESETS.common,
   inputOutputLogging: true,
   privacyMode: false,
   stripMultimodal: true,
@@ -56,7 +142,7 @@ export const DEFAULT_OPTIONS = Object.freeze({
  */
 export function buildR2Endpoint(accountId, jurisdiction = "default") {
   const id = String(accountId ?? "").trim().toLowerCase();
-  if (!id || !/^[a-f0-9]{32}$/i.test(id) && !/^[a-z0-9-]{6,64}$/i.test(id)) {
+  if (!id || (!/^[a-f0-9]{32}$/i.test(id) && !/^[a-z0-9-]{6,64}$/i.test(id))) {
     return "";
   }
   const jur = String(jurisdiction ?? "default").trim().toLowerCase();
@@ -208,8 +294,47 @@ function inferProvider(explicitProvider, endpoint, accountId) {
   if (ep.includes("amazonaws.com")) return "aws";
   if (accountId) return "r2";
   if (ep) return "custom";
-  // Preferred default is Cloudflare R2
   return "r2";
+}
+
+function detectMatchingPreset(fields) {
+  for (const name of ["common", "full", "minimal"]) {
+    const preset = TRACE_FIELD_PRESETS[name];
+    if (TRACE_FIELD_KEYS.every((k) => Boolean(fields[k]) === Boolean(preset[k]))) {
+      return name;
+    }
+  }
+  return "custom";
+}
+
+export function resolveTraceFields(merged = {}, env = process.env) {
+  const presetRaw = pickString(merged.tracePreset, env.S3_TRACE_PRESET, "common").toLowerCase();
+  const basePreset = TRACE_FIELD_PRESETS[presetRaw] || TRACE_FIELD_PRESETS.common;
+  const fields = { ...basePreset };
+
+  if (typeof env.S3_TRACE_FIELDS === "string" && env.S3_TRACE_FIELDS.trim()) {
+    const allowed = new Set(
+      env.S3_TRACE_FIELDS.split(/[,;\s]+/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+    );
+    for (const k of TRACE_FIELD_KEYS) {
+      fields[k] = allowed.has(k);
+    }
+  }
+
+  if (merged.traceFields && typeof merged.traceFields === "object" && !Array.isArray(merged.traceFields)) {
+    for (const k of TRACE_FIELD_KEYS) {
+      if (k in merged.traceFields && typeof merged.traceFields[k] === "boolean") {
+        fields[k] = merged.traceFields[k];
+      }
+    }
+  }
+
+  return {
+    traceFields: fields,
+    tracePreset: detectMatchingPreset(fields),
+  };
 }
 
 /**
@@ -251,7 +376,6 @@ export function validateBucketName(bucket, provider = "r2") {
   const b = String(bucket ?? "").trim();
   if (!b) return { ok: true };
   if (provider === "r2") {
-    // R2 error 10005: Bucket names must be 3-63 chars, lowercase alphanumeric and hyphens, start/end with alphanumeric.
     if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(b)) {
       return {
         ok: false,
@@ -322,7 +446,7 @@ export function resolveConfig(pluginOptions = {}, env = process.env, cwd = proce
     }
   }
 
-  const bucket = pickString(merged.bucket, envBucket);
+  const bucket = pickString(merged.bucket, envBucket, DEFAULT_BUCKET);
   const defaultRegion = provider === "r2" || provider === "gcs" ? "auto" : "us-east-1";
   const region = pickString(merged.region, envRegion, defaultRegion);
   const accessKeyId = pickString(merged.accessKeyId, envAk);
@@ -330,7 +454,7 @@ export function resolveConfig(pluginOptions = {}, env = process.env, cwd = proce
   const sessionToken = pickString(merged.sessionToken, envToken);
 
   const implicitEnvEnable = Boolean(
-    envBucket &&
+    bucket &&
       envAk &&
       envSk &&
       (provider === "aws" || provider === "gcs" || rawEndpoint || accountId)
@@ -356,14 +480,17 @@ export function resolveConfig(pluginOptions = {}, env = process.env, cwd = proce
   const sse = ["none", "AES256", "aws:kms"].includes(sseRaw) ? sseRaw : "none";
   const sseKmsKeyId = pickString(merged.sseKmsKeyId, env.S3_TRACE_SSE_KMS_KEY_ID);
 
-  const prefix =
-    pickString(merged.prefix, env.S3_TRACE_PREFIX, DEFAULT_PREFIX).replace(/^\/+|\/+$/g, "") || DEFAULT_PREFIX;
-  const pathTemplate =
-    pickString(merged.pathTemplate, env.S3_TRACE_PATH_TEMPLATE, DEFAULT_PATH_TEMPLATE).replace(/^\/+|\/+$/g, "") ||
-    DEFAULT_PATH_TEMPLATE;
+  const envFolder = pickString(env.S3_TRACE_FOLDER, env.S3_TRACE_PREFIX);
+  const rawFolder = pickString(merged.folder, merged.prefix, envFolder, DEFAULT_FOLDER).replace(/^\/+|\/+$/g, "") || DEFAULT_FOLDER;
+  const folderHasVars = rawFolder.includes("{");
+  const folder = folderHasVars ? DEFAULT_FOLDER : rawFolder;
+  const explicitTemplate = pickString(merged.pathTemplate, env.S3_TRACE_PATH_TEMPLATE).replace(/^\/+|\/+$/g, "");
+  const pathTemplate = explicitTemplate || (folderHasVars ? rawFolder : DEFAULT_PATH_TEMPLATE);
 
   const exportModeRaw = pickString(merged.exportMode, env.S3_TRACE_EXPORT_MODE, "single").toLowerCase();
   const exportMode = EXPORT_MODES.includes(exportModeRaw) ? exportModeRaw : "single";
+
+  const { traceFields, tracePreset } = resolveTraceFields(merged, env);
 
   const config = {
     enabled,
@@ -381,7 +508,8 @@ export function resolveConfig(pluginOptions = {}, env = process.env, cwd = proce
     storageClass,
     sse,
     sseKmsKeyId,
-    prefix,
+    folder,
+    prefix: folder,
     pathTemplate,
     exportMode,
     batchMaxItems: clampInt(merged.batchMaxItems ?? env.S3_TRACE_BATCH_MAX_ITEMS, DEFAULT_OPTIONS.batchMaxItems, 1, 500),
@@ -391,6 +519,8 @@ export function resolveConfig(pluginOptions = {}, env = process.env, cwd = proce
       1000,
       300000
     ),
+    tracePreset,
+    traceFields,
     inputOutputLogging: parseBool(
       merged.inputOutputLogging ?? env.S3_TRACE_IO_LOGGING,
       DEFAULT_OPTIONS.inputOutputLogging
@@ -484,11 +614,14 @@ export function publicConfigView(config) {
     storageClass: config.storageClass,
     sse: config.sse,
     sseKmsKeyId: config.sseKmsKeyId,
+    folder: config.folder,
     prefix: config.prefix,
     pathTemplate: config.pathTemplate,
     exportMode: config.exportMode,
     batchMaxItems: config.batchMaxItems,
     batchFlushIntervalMs: config.batchFlushIntervalMs,
+    tracePreset: config.tracePreset,
+    traceFields: config.traceFields,
     inputOutputLogging: config.inputOutputLogging,
     privacyMode: config.privacyMode,
     stripMultimodal: config.stripMultimodal,
@@ -564,6 +697,7 @@ export function sanitizeSettingsPatch(body = {}, defaultProvider = "r2") {
     "endpoint",
     "accessKeyId",
     "sseKmsKeyId",
+    "folder",
     "prefix",
     "pathTemplate",
   ];
@@ -579,6 +713,12 @@ export function sanitizeSettingsPatch(body = {}, defaultProvider = "r2") {
         patch[key] = cleaned;
       }
     }
+  }
+
+  if ("folder" in patch && patch.folder !== null) {
+    patch.prefix = patch.folder;
+  } else if ("prefix" in patch && patch.prefix !== null && !("folder" in patch)) {
+    patch.folder = patch.prefix;
   }
 
   if ("accountId" in patch && patch.accountId) {
@@ -614,6 +754,24 @@ export function sanitizeSettingsPatch(body = {}, defaultProvider = "r2") {
     const mode = String(body.exportMode ?? "single").trim().toLowerCase();
     if (!EXPORT_MODES.includes(mode)) throw new Error("Export mode must be 'single' or 'batch'.");
     patch.exportMode = mode;
+  }
+
+  if ("tracePreset" in body) {
+    const tp = String(body.tracePreset ?? "common").trim().toLowerCase();
+    if (!TRACE_PRESET_NAMES.includes(tp)) {
+      throw new Error(`Unsupported trace preset: ${body.tracePreset}`);
+    }
+    patch.tracePreset = tp;
+  }
+
+  if ("traceFields" in body && body.traceFields && typeof body.traceFields === "object" && !Array.isArray(body.traceFields)) {
+    const sanitizedFields = {};
+    for (const k of TRACE_FIELD_KEYS) {
+      if (k in body.traceFields && typeof body.traceFields[k] === "boolean") {
+        sanitizedFields[k] = body.traceFields[k];
+      }
+    }
+    patch.traceFields = sanitizedFields;
   }
 
   const intSpecs = [
